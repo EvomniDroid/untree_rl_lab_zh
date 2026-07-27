@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation, RigidObject
-from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import ManagerTermBase, RewardTermCfg, SceneEntityCfg
 from isaaclab.sensors import ContactSensor
 
 if TYPE_CHECKING:
@@ -148,6 +148,117 @@ def must_turn(
     return (torch.abs(yaw_command) > cmd_threshold).float() * penalty
 
 
+def heading_error(
+    env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Penalize absolute yaw-rate tracking error."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    return torch.abs(asset.data.root_ang_vel_b[:, 2] - command[:, 2])
+
+
+def parkour_feet_air_time(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    vel_threshold: float,
+    sensor_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Reward controlled swing time while discouraging one foot staying airborne."""
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    air_time = contact_sensor.data.current_air_time[:, sensor_cfg.body_ids]
+    contact_time = contact_sensor.data.current_contact_time[:, sensor_cfg.body_ids]
+    in_contact = contact_time > 0.0
+    swing_air_time = torch.where(in_contact, torch.zeros_like(air_time), air_time)
+    num_contact = torch.sum(in_contact.int(), dim=1)
+    has_swing = torch.logical_and(num_contact > 0, num_contact < in_contact.shape[1])
+    reward = torch.mean(swing_air_time, dim=1) * has_swing.float()
+
+    max_swing = torch.max(air_time, dim=1).values
+    mean_swing = torch.mean(air_time, dim=1)
+    asymmetry = torch.clamp(max_swing - 1.5 * (mean_swing + 0.1), min=0.0) ** 2
+    reward = reward - 0.3 * asymmetry
+
+    command = env.command_manager.get_command(command_name)
+    has_command = torch.logical_or(
+        torch.norm(command[:, :2], dim=1) > vel_threshold,
+        torch.abs(command[:, 2]) > vel_threshold,
+    )
+    return reward * has_command.float()
+
+
+def foot_contact_balance(
+    env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, max_air_time: float = 0.5
+) -> torch.Tensor:
+    """Require every foot to return to contact within a bounded time."""
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    air_time = contact_sensor.data.current_air_time[:, sensor_cfg.body_ids]
+    return torch.sum(torch.clamp(air_time - max_air_time, min=0.0) ** 2, dim=1)
+
+
+def feet_air_time_balance(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    sensor_cfg: SceneEntityCfg,
+    vel_threshold: float = 0.15,
+) -> torch.Tensor:
+    """Penalize unequal air time between the two diagonal pairs."""
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    air_time = contact_sensor.data.current_air_time[:, sensor_cfg.body_ids]
+    diagonal_a = 0.5 * (air_time[:, 0] + air_time[:, 3])
+    diagonal_b = 0.5 * (air_time[:, 1] + air_time[:, 2])
+    error = torch.square(diagonal_a - diagonal_b)
+
+    command = env.command_manager.get_command(command_name)
+    linear_command = torch.norm(command[:, :2], dim=1)
+    forward = linear_command > vel_threshold
+    turning = torch.abs(command[:, 2]) > vel_threshold
+    gate = torch.where(
+        forward & ~turning,
+        torch.ones_like(linear_command),
+        torch.where(
+            turning & ~forward,
+            torch.full_like(linear_command, 0.2),
+            torch.full_like(linear_command, 0.5),
+        ),
+    )
+    return error * gate * torch.logical_or(forward, turning).float()
+
+
+def contact_slide(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+    asset_cfg: SceneEntityCfg,
+    threshold: float = 0.1,
+) -> torch.Tensor:
+    """Penalize planar foot velocity while the foot is in contact."""
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    contacts = (
+        contact_sensor.data.net_forces_w_history[:, :, sensor_cfg.body_ids, :]
+        .norm(dim=-1)
+        .max(dim=1)[0]
+        > threshold
+    )
+    asset: Articulation = env.scene[asset_cfg.name]
+    body_velocity = asset.data.body_lin_vel_w[:, asset_cfg.body_ids, :2]
+    return torch.sum(body_velocity.norm(dim=-1) * contacts, dim=1)
+
+
+def roll_l1(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """Penalize absolute base roll, matching the Parkour B2RM objective."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    roll, _, _ = math_utils.euler_xyz_from_quat(asset.data.root_quat_w)
+    return torch.abs(roll)
+
+
+def positive_pitch_l2(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Penalize backward base pitch while allowing slight forward lean."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    _, pitch, _ = math_utils.euler_xyz_from_quat(asset.data.root_quat_w)
+    return torch.square(torch.clamp(pitch, min=0.0))
+
+
 """
 Robot.
 """
@@ -264,6 +375,226 @@ def feet_contact_without_cmd(
     command_norm = torch.norm(env.command_manager.get_command(command_name), dim=1)
     reward = torch.sum(is_contact, dim=-1).float()
     return reward * (command_norm < 0.1)
+
+
+def parkour_feet_height(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    target_height: float = 0.3,
+    base_to_ground_height: float = 0.4,
+    vel_threshold: float = 0.15,
+) -> torch.Tensor:
+    """Reward swing feet near the clearance used by the B2RM Parkour task."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    in_contact = contact_sensor.data.current_contact_time[:, sensor_cfg.body_ids] > 0.0
+
+    foot_z = asset.data.body_pos_w[:, asset_cfg.body_ids, 2]
+    base_z = asset.data.root_pos_w[:, 2].unsqueeze(1)
+    foot_height = foot_z - (base_z - base_to_ground_height)
+    swing_height = torch.where(in_contact, torch.zeros_like(foot_height), foot_height)
+    reward = torch.mean(torch.exp(-torch.square(swing_height - target_height) / 0.04), dim=1)
+
+    command = env.command_manager.get_command(command_name)
+    has_command = torch.logical_or(
+        torch.norm(command[:, :2], dim=1) > vel_threshold,
+        torch.abs(command[:, 2]) > vel_threshold,
+    )
+    return reward * has_command.float()
+
+
+def feet_height_balance(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    max_height: float = 0.36,
+    base_to_ground_height: float = 0.4,
+) -> torch.Tensor:
+    """Penalize diagonal swing-height asymmetry and excessive clearance."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    swing = contact_sensor.data.current_contact_time[:, sensor_cfg.body_ids] <= 0.0
+
+    foot_z = asset.data.body_pos_w[:, asset_cfg.body_ids, 2]
+    base_z = asset.data.root_pos_w[:, 2].unsqueeze(1)
+    foot_height = foot_z - (base_z - base_to_ground_height)
+
+    symmetry_error = torch.zeros(env.num_envs, device=env.device)
+    for first, second in ((0, 3), (1, 2)):
+        pair_swing = swing[:, first] & swing[:, second]
+        symmetry_error += torch.square(foot_height[:, first] - foot_height[:, second]) * pair_swing.float()
+
+    excessive_height = torch.clamp(foot_height - max_height, min=0.0)
+    height_error = torch.sum(torch.square(excessive_height) * swing.float(), dim=1)
+
+    command = env.command_manager.get_command(command_name)
+    linear_command = torch.norm(command[:, :2], dim=1)
+    forward = linear_command > 0.1
+    turning = torch.abs(command[:, 2]) > 0.1
+    gate = torch.where(
+        forward & ~turning,
+        torch.ones_like(linear_command),
+        torch.where(
+            turning & ~forward,
+            torch.full_like(linear_command, 0.2),
+            torch.full_like(linear_command, 0.5),
+        ),
+    )
+    return (symmetry_error + height_error) * gate * torch.logical_or(forward, turning).float()
+
+
+def net_mechanical_work(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Penalize absolute net joint power, as in the Parkour task."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    power = asset.data.applied_torque[:, asset_cfg.joint_ids] * asset.data.joint_vel[:, asset_cfg.joint_ids]
+    return torch.abs(torch.sum(power, dim=1))
+
+
+class delta_torques(ManagerTermBase):
+    """Penalize step-to-step changes in commanded joint torque."""
+
+    def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        asset_cfg = cfg.params.get("asset_cfg", SceneEntityCfg("robot"))
+        self.asset: Articulation = env.scene[asset_cfg.name]
+        self._last_torques = torch.zeros_like(self.asset.data.applied_torque[:, asset_cfg.joint_ids])
+
+    def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+        current = self.asset.data.applied_torque[:, asset_cfg.joint_ids]
+        penalty = torch.sum(torch.square(current - self._last_torques), dim=1)
+        self._last_torques[:] = current
+        return penalty
+
+    def reset(self, env_ids):
+        self._last_torques[env_ids] = 0.0
+
+
+class feet_jerk(ManagerTermBase):
+    """Penalize step-to-step changes in foot contact force."""
+
+    def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        sensor_cfg = cfg.params["sensor_cfg"]
+        self.sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+        self._last_forces = torch.zeros(env.num_envs, len(sensor_cfg.body_ids), 3, device=env.device)
+
+    def __call__(self, env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
+        forces = self.sensor.data.net_forces_w_history[:, -1, sensor_cfg.body_ids]
+        penalty = torch.sum(torch.norm(forces - self._last_forces, dim=-1), dim=1)
+        self._last_forces[:] = forces
+        return penalty
+
+    def reset(self, env_ids):
+        self._last_forces[env_ids] = 0.0
+
+
+def contact_forces_penalty(
+    env: ManagerBasedRLEnv, threshold: float, sensor_cfg: SceneEntityCfg
+) -> torch.Tensor:
+    """Penalize foot contact force above a fixed threshold."""
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    forces = contact_sensor.data.net_forces_w_history[:, -1, sensor_cfg.body_ids]
+    excess = torch.clamp(torch.norm(forces, dim=-1) - threshold, min=0.0)
+    return torch.sum(excess, dim=1)
+
+
+def tracking_contacts_shaped_force(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    sensor_cfg: SceneEntityCfg,
+    sigma: float = 0.5,
+    kappa: float = 0.07,
+) -> torch.Tensor:
+    """Favor diagonal support and smooth changes in mean foot force."""
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    forces = contact_sensor.data.net_forces_w_history[:, -1, sensor_cfg.body_ids]
+    normalized_force = torch.clamp(torch.norm(forces, dim=-1) / 120.0, 0.0, 1.0)
+
+    non_diagonal_error = (
+        normalized_force[:, 0] * normalized_force[:, 1]
+        + normalized_force[:, 0] * normalized_force[:, 2]
+        + normalized_force[:, 1] * normalized_force[:, 3]
+        + normalized_force[:, 2] * normalized_force[:, 3]
+    )
+    mean_force = torch.mean(normalized_force, dim=1)
+    mean_error = torch.clamp(torch.abs(mean_force - 0.5) - sigma, min=0.0) ** 2
+
+    if not hasattr(env, "_b2rm_last_contact_mean"):
+        env._b2rm_last_contact_mean = torch.zeros_like(mean_force)
+    phase_jitter = torch.square(mean_force - env._b2rm_last_contact_mean)
+    env._b2rm_last_contact_mean = (
+        (1.0 - kappa) * env._b2rm_last_contact_mean + kappa * mean_force
+    )
+
+    command = env.command_manager.get_command(command_name)
+    linear_command = torch.norm(command[:, :2], dim=1)
+    forward = linear_command > 0.1
+    turning = torch.abs(command[:, 2]) > 0.1
+    gate = torch.where(
+        forward & ~turning,
+        torch.ones_like(linear_command),
+        torch.where(
+            turning & ~forward,
+            torch.full_like(linear_command, 0.3),
+            torch.full_like(linear_command, 0.7),
+        ),
+    )
+    return (non_diagonal_error + mean_error + phase_jitter) * gate * torch.logical_or(forward, turning).float()
+
+
+def tracking_contacts_shaped_vel(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    sigma: float = 0.5,
+) -> torch.Tensor:
+    """Keep stance feet still and require swing feet to move."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    forces = contact_sensor.data.net_forces_w_history[:, -1, sensor_cfg.body_ids]
+    in_contact = torch.norm(forces, dim=-1) > 1.0
+    foot_speed = torch.norm(asset.data.body_lin_vel_w[:, asset_cfg.body_ids, :], dim=-1)
+    swing_penalty = torch.clamp(
+        -torch.where(in_contact, torch.zeros_like(foot_speed), foot_speed - sigma), min=0.0
+    )
+    stance_penalty = torch.where(in_contact, foot_speed, torch.zeros_like(foot_speed))
+
+    command = env.command_manager.get_command(command_name)
+    has_command = torch.logical_or(
+        torch.norm(command[:, :2], dim=1) > 0.1,
+        torch.abs(command[:, 2]) > 0.1,
+    )
+    return torch.sum(swing_penalty + stance_penalty, dim=1) * has_command.float()
+
+
+def walking_dof(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg,
+    vel_threshold: float = 0.15,
+    sigma: float = 0.05,
+) -> torch.Tensor:
+    """Reward a compact gait near the nominal standing pose."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    error = torch.sum(
+        torch.abs(
+            asset.data.joint_pos[:, asset_cfg.joint_ids]
+            - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+        ),
+        dim=1,
+    )
+    command = env.command_manager.get_command(command_name)
+    has_command = torch.logical_or(
+        torch.norm(command[:, :2], dim=1) > vel_threshold,
+        torch.abs(command[:, 2]) > vel_threshold,
+    )
+    return torch.exp(-sigma * error) * has_command.float()
 
 
 def air_time_variance_penalty(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:

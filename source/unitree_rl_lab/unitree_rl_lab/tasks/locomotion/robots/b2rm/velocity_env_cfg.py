@@ -115,6 +115,9 @@ FEET_CFG = SceneEntityCfg("contact_forces", body_names=".*_foot")
 ORDERED_FEET_CFG = SceneEntityCfg(
     "contact_forces", body_names=["FL_foot", "FR_foot", "RL_foot", "RR_foot"], preserve_order=True
 )
+ORDERED_FEET_BODY_CFG = SceneEntityCfg(
+    "robot", body_names=["FL_foot", "FR_foot", "RL_foot", "RR_foot"], preserve_order=True
+)
 
 
 @configclass
@@ -156,53 +159,125 @@ class ObservationsCfg:
 
 @configclass
 class RewardsCfg:
-    # Flat-ground, deployable subset of the B2RM Parkour and Go2 velocity
-    # objectives. It has no terrain, vision, random pushes, or contacts other
-    # than feet/ground, but keeps the gait-quality constraints.
+    # Flat-ground subset of the final B2RM Parkour reward configuration.
+    # Terrain/vision/arm terms are intentionally omitted.
     track_lin_vel_xy = RewTerm(
         func=mdp.track_lin_vel_xy_exp, weight=4.0,
-        params={"command_name": "base_velocity", "std": 0.35},
+        params={"command_name": "base_velocity", "std": 0.5},
     )
     track_ang_vel_z = RewTerm(
         func=mdp.track_ang_vel_z_exp, weight=2.0,
         params={"command_name": "base_velocity", "std": 0.5},
     )
-    is_alive = RewTerm(func=mdp.is_alive, weight=1.0)
-    forward_velocity_deficit = RewTerm(
-        func=mdp.forward_velocity_deficit, weight=-3.0, params={"command_name": "base_velocity"}
+    heading_error = RewTerm(
+        func=mdp.heading_error, weight=-1.5, params={"command_name": "base_velocity"}
     )
-    forward_velocity_error = RewTerm(
-        func=mdp.forward_velocity_error_l2, weight=-4.0, params={"command_name": "base_velocity"}
+    dont_wait = RewTerm(
+        func=mdp.dont_wait, weight=-2.0, params={"command_name": "base_velocity"}
     )
-    # Keep the policy mean in a finite, deployable action range. Action-rate
-    # alone cannot prevent a constant but saturated output.
-    action_magnitude = RewTerm(func=mdp.action_l2, weight=-0.10)
-    yaw_rate_error = RewTerm(
-        func=mdp.yaw_rate_error_l2, weight=-2.0, params={"command_name": "base_velocity"}
+    is_alive = RewTerm(func=mdp.is_alive, weight=2.0)
+    feet_air_time = RewTerm(
+        func=mdp.parkour_feet_air_time,
+        weight=0.5,
+        params={
+            "command_name": "base_velocity",
+            "sensor_cfg": ORDERED_FEET_CFG,
+            "vel_threshold": 0.15,
+        },
     )
-    lin_vel_z = RewTerm(func=mdp.lin_vel_z_l2, weight=-2.0)
-    ang_vel_xy = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.25)
-    joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-5.0e-4, params={"asset_cfg": LEG_CFG})
-    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-1.0e-6, params={"asset_cfg": LEG_CFG})
-    joint_torques = RewTerm(func=mdp.joint_torques_l2, weight=-5.0e-5, params={"asset_cfg": LEG_CFG})
-    mechanical_power = RewTerm(func=mdp.mechanical_power_l1, weight=-2.0e-4, params={"asset_cfg": LEG_CFG})
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.03)
-    joint_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-1.0, params={"asset_cfg": LEG_CFG})
-    flat_orientation = RewTerm(func=mdp.flat_orientation_l2, weight=-2.5)
-    # The validated target2 PD stand settles at base_link z about 0.58 m.
-    base_height = RewTerm(func=mdp.base_height_l2, weight=-2.0, params={"target_height": 0.58})
-    joint_deviation = RewTerm(func=mdp.joint_deviation_l1, weight=-0.15, params={"asset_cfg": LEG_CFG})
-    diagonal_gait_contact = RewTerm(
-        func=mdp.diagonal_gait_contact_penalty,
+    foot_contact_balance = RewTerm(
+        func=mdp.foot_contact_balance,
+        weight=-2.0,
+        params={"sensor_cfg": ORDERED_FEET_CFG, "max_air_time": 1.0},
+    )
+    feet_air_time_balance = RewTerm(
+        func=mdp.feet_air_time_balance,
         weight=-1.0,
-        params={"command_name": "base_velocity", "sensor_cfg": ORDERED_FEET_CFG},
-    )
-    max_foot_air_time = RewTerm(
-        func=mdp.max_foot_air_time_penalty, weight=-2.0, params={"sensor_cfg": FEET_CFG, "max_air_time": 0.60}
+        params={
+            "command_name": "base_velocity",
+            "sensor_cfg": ORDERED_FEET_CFG,
+            "vel_threshold": 0.15,
+        },
     )
     feet_slide = RewTerm(
-        func=mdp.feet_slide, weight=-0.25,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"), "sensor_cfg": FEET_CFG},
+        func=mdp.contact_slide,
+        weight=-0.5,
+        params={
+            "sensor_cfg": ORDERED_FEET_CFG,
+            "asset_cfg": ORDERED_FEET_BODY_CFG,
+            "threshold": 1.0,
+        },
+    )
+    # Parkour did not constrain raw network outputs. Keep this small deployment
+    # guard because this task's Kp=1000 makes saturated residuals dangerous.
+    action_magnitude = RewTerm(func=mdp.action_l2, weight=-0.10)
+    ang_vel_xy = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.2)
+    lin_vel_z = RewTerm(func=mdp.lin_vel_z_l2, weight=-1.5)
+    roll = RewTerm(func=mdp.roll_l1, weight=-2.0)
+    joint_torques = RewTerm(func=mdp.joint_torques_l2, weight=-2.5e-5, params={"asset_cfg": LEG_CFG})
+    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-7.5e-7, params={"asset_cfg": LEG_CFG})
+    joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-1.0e-4, params={"asset_cfg": LEG_CFG})
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.015)
+    joint_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-1.0, params={"asset_cfg": LEG_CFG})
+    flat_orientation = RewTerm(func=mdp.flat_orientation_l2, weight=-2.5)
+    base_pitch = RewTerm(func=mdp.positive_pitch_l2, weight=-2.0)
+    # The validated target2 PD stand settles at base_link z about 0.58 m.
+    base_height = RewTerm(func=mdp.base_height_l2, weight=-4.0, params={"target_height": 0.58})
+    joint_deviation = RewTerm(func=mdp.joint_deviation_l1, weight=-0.3, params={"asset_cfg": LEG_CFG})
+    feet_height = RewTerm(
+        func=mdp.parkour_feet_height,
+        weight=1.0,
+        params={
+            "command_name": "base_velocity",
+            "asset_cfg": ORDERED_FEET_BODY_CFG,
+            "sensor_cfg": ORDERED_FEET_CFG,
+            "target_height": 0.3,
+        },
+    )
+    feet_height_balance = RewTerm(
+        func=mdp.feet_height_balance,
+        weight=-4.0,
+        params={
+            "command_name": "base_velocity",
+            "asset_cfg": ORDERED_FEET_BODY_CFG,
+            "sensor_cfg": ORDERED_FEET_CFG,
+            "max_height": 0.36,
+        },
+    )
+    work = RewTerm(func=mdp.net_mechanical_work, weight=-0.003, params={"asset_cfg": LEG_CFG})
+    delta_torques = RewTerm(func=mdp.delta_torques, weight=-1.0e-7, params={"asset_cfg": LEG_CFG})
+    feet_jerk = RewTerm(
+        func=mdp.feet_jerk, weight=-0.0002, params={"sensor_cfg": ORDERED_FEET_CFG}
+    )
+    contact_forces = RewTerm(
+        func=mdp.contact_forces_penalty,
+        weight=-0.001,
+        params={"threshold": 120.0, "sensor_cfg": ORDERED_FEET_CFG},
+    )
+    tracking_contacts_force = RewTerm(
+        func=mdp.tracking_contacts_shaped_force,
+        weight=-2.0,
+        params={
+            "command_name": "base_velocity",
+            "sensor_cfg": ORDERED_FEET_CFG,
+            "sigma": 0.5,
+            "kappa": 0.07,
+        },
+    )
+    tracking_contacts_vel = RewTerm(
+        func=mdp.tracking_contacts_shaped_vel,
+        weight=-2.0,
+        params={
+            "command_name": "base_velocity",
+            "asset_cfg": ORDERED_FEET_BODY_CFG,
+            "sensor_cfg": ORDERED_FEET_CFG,
+            "sigma": 0.5,
+        },
+    )
+    walking_dof = RewTerm(
+        func=mdp.walking_dof,
+        weight=0.5,
+        params={"command_name": "base_velocity", "asset_cfg": LEG_CFG},
     )
 
 
