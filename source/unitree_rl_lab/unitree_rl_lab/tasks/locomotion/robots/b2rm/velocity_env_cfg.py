@@ -112,6 +112,9 @@ class ActionsCfg:
 
 LEG_CFG = SceneEntityCfg("robot", joint_names=LEG_JOINT_NAMES)
 FEET_CFG = SceneEntityCfg("contact_forces", body_names=".*_foot")
+ORDERED_FEET_CFG = SceneEntityCfg(
+    "contact_forces", body_names=["FL_foot", "FR_foot", "RL_foot", "RR_foot"], preserve_order=True
+)
 
 
 @configclass
@@ -182,17 +185,18 @@ class RewardsCfg:
     joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-5.0e-4, params={"asset_cfg": LEG_CFG})
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-1.0e-6, params={"asset_cfg": LEG_CFG})
     joint_torques = RewTerm(func=mdp.joint_torques_l2, weight=-5.0e-5, params={"asset_cfg": LEG_CFG})
+    mechanical_power = RewTerm(func=mdp.mechanical_power_l1, weight=-2.0e-4, params={"asset_cfg": LEG_CFG})
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.03)
     joint_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-1.0, params={"asset_cfg": LEG_CFG})
     flat_orientation = RewTerm(func=mdp.flat_orientation_l2, weight=-2.5)
     # The validated target2 PD stand settles at base_link z about 0.58 m.
     base_height = RewTerm(func=mdp.base_height_l2, weight=-2.0, params={"target_height": 0.58})
     joint_deviation = RewTerm(func=mdp.joint_deviation_l1, weight=-0.15, params={"asset_cfg": LEG_CFG})
-    feet_air_time = RewTerm(
-        func=mdp.feet_air_time, weight=0.3,
-        params={"sensor_cfg": FEET_CFG, "command_name": "base_velocity", "threshold": 0.5},
+    diagonal_gait_contact = RewTerm(
+        func=mdp.diagonal_gait_contact_penalty,
+        weight=-1.0,
+        params={"command_name": "base_velocity", "sensor_cfg": ORDERED_FEET_CFG},
     )
-    air_time_variance = RewTerm(func=mdp.air_time_variance_penalty, weight=-0.5, params={"sensor_cfg": FEET_CFG})
     max_foot_air_time = RewTerm(
         func=mdp.max_foot_air_time_penalty, weight=-2.0, params={"sensor_cfg": FEET_CFG, "max_air_time": 0.60}
     )

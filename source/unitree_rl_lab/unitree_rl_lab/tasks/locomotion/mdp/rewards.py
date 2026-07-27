@@ -81,6 +81,45 @@ def max_foot_air_time_penalty(
     return torch.sum(torch.square(torch.clamp(air_time - max_air_time, min=0.0)), dim=1)
 
 
+def diagonal_gait_contact_penalty(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    sensor_cfg: SceneEntityCfg,
+    contact_force_threshold: float = 5.0,
+) -> torch.Tensor:
+    """Favor two-foot diagonal support and penalize synchronized hopping.
+
+    Foot order is explicitly configured as FL, FR, RL, RR. FL/RR and FR/RL
+    are the allowed diagonal support pairs; front, rear, and same-side pairs
+    are penalized. A contact count far from two also penalizes all-feet flight
+    and all-feet impact without imposing an episode-time gait clock.
+    """
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    forces = contact_sensor.data.net_forces_w_history[:, -1, sensor_cfg.body_ids]
+    contact = (torch.linalg.vector_norm(forces, dim=-1) > contact_force_threshold).float()
+
+    non_diagonal_contact = (
+        contact[:, 0] * contact[:, 1]  # front pair: FL-FR
+        + contact[:, 2] * contact[:, 3]  # rear pair: RL-RR
+        + contact[:, 0] * contact[:, 2]  # left pair: FL-RL
+        + contact[:, 1] * contact[:, 3]  # right pair: FR-RR
+    )
+    contact_count = torch.sum(contact, dim=1)
+    count_error = torch.square(torch.clamp(torch.abs(contact_count - 2.0) - 0.5, min=0.0))
+    has_forward_command = env.command_manager.get_command(command_name)[:, 0] > 0.05
+    return (non_diagonal_contact + count_error) * has_forward_command.float()
+
+
+def mechanical_power_l1(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Penalize absolute leg mechanical power; synchronized jumps are costly."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    torque = asset.data.applied_torque[:, asset_cfg.joint_ids]
+    joint_velocity = asset.data.joint_vel[:, asset_cfg.joint_ids]
+    return torch.sum(torch.abs(torque * joint_velocity), dim=1)
+
+
 def yaw_rate_error_l2(
     env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
