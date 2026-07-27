@@ -91,12 +91,19 @@ class ActionsCfg:
     leg_joint_pos = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=LEG_JOINT_NAMES,
-        # Parkour uses a wide residual target range.  +/-0.05 rad is enough
+        # Parkour uses a wide residual target range. +/-0.05 rad is enough
         # to find a static compensation pose, but not enough hip/thigh travel
         # for a meaningful gait under the official high-PD stand controller.
         scale=0.20,
         use_default_offset=True,
-        clip={".*": (-1.0, 1.0)},
+        # These are absolute joint-position limits after scale and offset.
+        # In particular, a generic [-1, 1] limit clips target2's calf=-1.30
+        # and encourages the policy to exploit saturation instead of gait.
+        clip={
+            ".*_hip_joint": (-0.45, 0.45),
+            ".*_thigh_joint": (0.15, 1.20),
+            ".*_calf_joint": (-1.85, -0.75),
+        },
     )
     arm_hold = mdp.FixedJointPositionActionCfg(
         asset_name="robot", joint_names=ARM_JOINT_NAMES, joint_positions=ARM_FOLDED_POS
@@ -159,6 +166,12 @@ class RewardsCfg:
     is_alive = RewTerm(func=mdp.is_alive, weight=0.25)
     forward_velocity_deficit = RewTerm(
         func=mdp.forward_velocity_deficit, weight=-5.0, params={"command_name": "base_velocity"}
+    )
+    # Keep the policy mean in a finite, deployable action range. Action-rate
+    # alone cannot prevent a constant but saturated output.
+    action_magnitude = RewTerm(func=mdp.action_l2, weight=-0.05)
+    yaw_rate_error = RewTerm(
+        func=mdp.yaw_rate_error_l2, weight=-1.5, params={"command_name": "base_velocity"}
     )
     lin_vel_z = RewTerm(func=mdp.lin_vel_z_l2, weight=-1.5)
     ang_vel_xy = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.2)

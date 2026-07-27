@@ -51,7 +51,10 @@ def main() -> None:
     command.debug_vis = True
 
     env = gym.make(args_cli.task, cfg=env_cfg)
-    env = RslRlVecEnvWrapper(env, clip_actions=1.0)
+    # Match training exactly.  The runner was trained with clip_actions=None;
+    # clipping the actor's raw output here changes its position targets before
+    # the environment applies its own configured joint-target limits.
+    env = RslRlVecEnvWrapper(env, clip_actions=None)
     checkpoint = os.path.abspath(args_cli.checkpoint)
     agent_cfg = load_cfg_from_registry(args_cli.task, "rsl_rl_cfg_entry_point")
     if agent_cfg.experiment_name == "":

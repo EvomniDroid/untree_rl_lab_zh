@@ -63,6 +63,15 @@ def forward_velocity_deficit(
     return torch.where(target_speed > 1.0e-3, shortfall / target_speed, torch.zeros_like(target_speed))
 
 
+def yaw_rate_error_l2(
+    env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Penalize yaw-rate error directly instead of only reducing a reward."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    yaw_command = env.command_manager.get_command(command_name)[:, 2]
+    return torch.square(asset.data.root_ang_vel_b[:, 2] - yaw_command)
+
+
 def must_turn(
     env: ManagerBasedRLEnv,
     command_name: str,
