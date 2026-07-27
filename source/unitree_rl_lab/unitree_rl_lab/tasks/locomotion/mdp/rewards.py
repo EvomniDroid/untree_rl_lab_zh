@@ -405,6 +405,32 @@ def parkour_feet_height(
     return reward * has_command.float()
 
 
+def swing_foot_clearance(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    target_height: float = 0.10,
+    std: float = 0.04,
+) -> torch.Tensor:
+    """Reward airborne feet for reaching a useful flat-ground clearance."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    swing = contact_sensor.data.current_contact_time[:, sensor_cfg.body_ids] <= 0.0
+    foot_height = asset.data.body_pos_w[:, asset_cfg.body_ids, 2]
+    per_foot_reward = torch.exp(-torch.square(foot_height - target_height) / (std * std))
+    swing_count = torch.clamp(torch.sum(swing.float(), dim=1), min=1.0)
+    reward = torch.sum(per_foot_reward * swing.float(), dim=1) / swing_count
+
+    command = env.command_manager.get_command(command_name)
+    has_command = torch.logical_or(
+        torch.norm(command[:, :2], dim=1) > 0.1,
+        torch.abs(command[:, 2]) > 0.1,
+    )
+    has_swing = torch.any(swing, dim=1)
+    return reward * has_command.float() * has_swing.float()
+
+
 def feet_height_balance(
     env: ManagerBasedRLEnv,
     command_name: str,

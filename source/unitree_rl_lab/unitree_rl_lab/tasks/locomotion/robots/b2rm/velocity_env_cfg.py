@@ -133,6 +133,7 @@ class ObservationsCfg:
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, params={"asset_cfg": LEG_CFG})
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, scale=0.05, params={"asset_cfg": LEG_CFG})
         last_action = ObsTerm(func=mdp.last_action)
+        gait_phase = ObsTerm(func=mdp.gait_phase, params={"period": 0.6})
 
         def __post_init__(self):
             self.enable_corruption = False
@@ -148,6 +149,7 @@ class ObservationsCfg:
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, scale=0.05, params={"asset_cfg": LEG_CFG})
         joint_effort = ObsTerm(func=mdp.joint_effort, scale=0.01, params={"asset_cfg": LEG_CFG})
         last_action = ObsTerm(func=mdp.last_action)
+        gait_phase = ObsTerm(func=mdp.gait_phase, params={"period": 0.6})
 
         def __post_init__(self):
             self.enable_corruption = False
@@ -208,30 +210,42 @@ class RewardsCfg:
             "threshold": 1.0,
         },
     )
-    # Parkour did not constrain raw network outputs. Keep this small deployment
-    # guard because this task's Kp=1000 makes saturated residuals dangerous.
-    action_magnitude = RewTerm(func=mdp.action_l2, weight=-0.10)
+    # Keep a light deployment guard without suppressing useful stride length.
+    action_magnitude = RewTerm(func=mdp.action_l2, weight=-0.03)
     ang_vel_xy = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.2)
     lin_vel_z = RewTerm(func=mdp.lin_vel_z_l2, weight=-1.5)
     roll = RewTerm(func=mdp.roll_l1, weight=-2.0)
     joint_torques = RewTerm(func=mdp.joint_torques_l2, weight=-2.5e-5, params={"asset_cfg": LEG_CFG})
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-7.5e-7, params={"asset_cfg": LEG_CFG})
     joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-1.0e-4, params={"asset_cfg": LEG_CFG})
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.015)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
     joint_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-1.0, params={"asset_cfg": LEG_CFG})
     flat_orientation = RewTerm(func=mdp.flat_orientation_l2, weight=-2.5)
     base_pitch = RewTerm(func=mdp.positive_pitch_l2, weight=-2.0)
     # The validated target2 PD stand settles at base_link z about 0.58 m.
     base_height = RewTerm(func=mdp.base_height_l2, weight=-4.0, params={"target_height": 0.58})
-    joint_deviation = RewTerm(func=mdp.joint_deviation_l1, weight=-0.3, params={"asset_cfg": LEG_CFG})
+    joint_deviation = RewTerm(func=mdp.joint_deviation_l1, weight=-0.1, params={"asset_cfg": LEG_CFG})
+    trot_gait = RewTerm(
+        func=mdp.feet_gait,
+        weight=1.0,
+        params={
+            "period": 0.6,
+            # Explicit FL, FR, RL, RR order: the two diagonal pairs alternate.
+            "offset": [0.0, 0.5, 0.5, 0.0],
+            "threshold": 0.5,
+            "sensor_cfg": ORDERED_FEET_CFG,
+            "command_name": "base_velocity",
+        },
+    )
     feet_height = RewTerm(
-        func=mdp.parkour_feet_height,
+        func=mdp.swing_foot_clearance,
         weight=1.0,
         params={
             "command_name": "base_velocity",
             "asset_cfg": ORDERED_FEET_BODY_CFG,
             "sensor_cfg": ORDERED_FEET_CFG,
-            "target_height": 0.3,
+            "target_height": 0.10,
+            "std": 0.04,
         },
     )
     feet_height_balance = RewTerm(
@@ -252,7 +266,9 @@ class RewardsCfg:
     contact_forces = RewTerm(
         func=mdp.contact_forces_penalty,
         weight=-0.001,
-        params={"threshold": 120.0, "sensor_cfg": ORDERED_FEET_CFG},
+        # 90.7 kg B2RM: static four-foot load is ~222 N/foot and nominal
+        # diagonal support is ~445 N/foot before dynamic impact.
+        params={"threshold": 600.0, "sensor_cfg": ORDERED_FEET_CFG},
     )
     tracking_contacts_force = RewTerm(
         func=mdp.tracking_contacts_shaped_force,
@@ -276,7 +292,7 @@ class RewardsCfg:
     )
     walking_dof = RewTerm(
         func=mdp.walking_dof,
-        weight=0.5,
+        weight=0.1,
         params={"command_name": "base_velocity", "asset_cfg": LEG_CFG},
     )
 
