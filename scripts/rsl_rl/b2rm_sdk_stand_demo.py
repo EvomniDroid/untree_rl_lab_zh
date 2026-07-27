@@ -1,8 +1,8 @@
 """Reproduce the Unitree B2 SDK2 low-level stand/down sequence in Isaac Lab.
 
-This is a PD-position-control demo, not an RL policy.  It follows the SDK2
-sequence: current pose -> target1 crouch -> target2 stand -> target3 down.
-The B2RM arm stays at its fixed folded target throughout.
+This is a PD-position-control demo, not an RL policy. It starts at the
+verified SDK2 target2 stand pose, holds it, then moves to target3 down. The
+B2RM arm stays at its fixed folded target throughout.
 """
 
 from __future__ import annotations
@@ -14,10 +14,11 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Run the B2 SDK2 stand/down PD sequence in Isaac Lab.")
 parser.add_argument("--task", type=str, default="Unitree-B2RM-Velocity")
-parser.add_argument("--crouch-seconds", type=float, default=1.0)
 parser.add_argument("--stand-seconds", type=float, default=1.8)
 parser.add_argument("--hold-seconds", type=float, default=2.0)
 parser.add_argument("--down-seconds", type=float, default=1.8)
+parser.add_argument("--up-seconds", type=float, default=1.8)
+parser.add_argument("--cycles", type=int, default=1, help="Number of target2 -> target3 -> target2 cycles.")
 parser.add_argument("--disable_fabric", action="store_true", default=False)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -30,18 +31,11 @@ import torch
 
 import isaaclab_tasks  # noqa: F401
 import unitree_rl_lab.tasks  # noqa: F401
-from unitree_rl_lab.assets.robots.b2rm import LEG_JOINT_NAMES
 from unitree_rl_lab.utils.parser_cfg import parse_env_cfg
 
 
 # SDK motor order is FR, FL, RR, RL.  Store the pose by name so it is safely
 # reordered to the policy/action order (FL, FR, RL, RR) below.
-SDK_TARGET_1 = {
-    "FR": (0.0, 1.36, -2.65),
-    "FL": (0.0, 1.36, -2.65),
-    "RR": (-0.2, 1.36, -2.65),
-    "RL": (0.2, 1.36, -2.65),
-}
 SDK_TARGET_2 = {leg: (0.0, 0.67, -1.30) for leg in ("FR", "FL", "RR", "RL")}
 SDK_TARGET_3 = {
     "FR": (-0.5, 1.36, -2.65),
@@ -51,10 +45,12 @@ SDK_TARGET_3 = {
 }
 
 
-def pose_tensor(pose: dict[str, tuple[float, float, float]], device: torch.device) -> torch.Tensor:
-    """Return a single 12-D target in LEG_JOINT_NAMES order."""
+def pose_tensor(
+    pose: dict[str, tuple[float, float, float]], joint_names: list[str], device: torch.device
+) -> torch.Tensor:
+    """Return a target in the action term's resolved joint order."""
     values: list[float] = []
-    for joint_name in LEG_JOINT_NAMES:
+    for joint_name in joint_names:
         leg_name, joint_type, _ = joint_name.split("_")
         joint_index = {"hip": 0, "thigh": 1, "calf": 2}[joint_type]
         values.append(pose[leg_name][joint_index])
@@ -98,21 +94,19 @@ def main() -> None:
 
         leg_action = env.unwrapped.action_manager.get_term("leg_joint_pos")
         leg_joint_ids = leg_action._joint_ids
+        leg_joint_names = list(leg_action._joint_names)
+        print(f"[pd-demo] resolved leg action order: {leg_joint_names}")
         start_target = robot.data.joint_pos[:, leg_joint_ids].clone()
-        target_1 = pose_tensor(SDK_TARGET_1, device)
-        target_2 = pose_tensor(SDK_TARGET_2, device)
-        target_3 = pose_tensor(SDK_TARGET_3, device)
+        target_2 = pose_tensor(SDK_TARGET_2, leg_joint_names, device)
+        target_3 = pose_tensor(SDK_TARGET_3, leg_joint_names, device)
         default_target = robot.data.default_joint_pos[:, leg_joint_ids]
-        phases = (
-            ("crouch", start_target, target_1, args_cli.crouch_seconds),
-            ("stand", target_1, target_2, args_cli.stand_seconds),
-            ("hold", target_2, target_2, args_cli.hold_seconds),
-            ("down", target_2, target_3, args_cli.down_seconds),
-        )
-
         print("B2RM SDK2-style PD stand/down demo")
         print("PD gains: Kp=1000, Kd=10; control_dt=0.002 s; arm=fixed folded pose")
-        for phase_name, phase_start, phase_end, seconds in phases:
+        print(f"[pd-demo] cycles={args_cli.cycles}")
+
+        def run_phase(phase_name: str, phase_start: torch.Tensor, phase_end: torch.Tensor, seconds: float) -> None:
+            if seconds <= 0.0:
+                return
             steps = max(1, round(seconds / env.unwrapped.step_dt))
             print(f"[pd-demo] phase={phase_name} duration={seconds:.2f}s steps={steps}")
             for step in range(steps):
@@ -129,6 +123,13 @@ def main() -> None:
                         f"root_z={root_z:.3f} gravity_b=({gravity[0].item():+.2f},"
                         f"{gravity[1].item():+.2f},{gravity[2].item():+.2f})"
                     )
+
+        run_phase("target2", start_target, target_2, args_cli.stand_seconds)
+        for cycle in range(max(0, args_cli.cycles)):
+            print(f"[pd-demo] cycle={cycle + 1}/{args_cli.cycles}")
+            run_phase("hold", target_2, target_2, args_cli.hold_seconds)
+            run_phase("down", target_2, target_3, args_cli.down_seconds)
+            run_phase("up", target_3, target_2, args_cli.up_seconds)
         print("[pd-demo] complete")
     finally:
         env.close()

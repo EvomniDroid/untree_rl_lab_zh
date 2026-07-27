@@ -10,6 +10,6 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": f"{__name__}.velocity_env_cfg:B2RMVelocityEnvCfg",
         "play_env_cfg_entry_point": f"{__name__}.velocity_env_cfg:B2RMVelocityPlayEnvCfg",
-        "rsl_rl_cfg_entry_point": "unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
+        "rsl_rl_cfg_entry_point": f"{__name__}.agents.rsl_rl_ppo_cfg:B2RMVelocityPPORunnerCfg",
     },
 )

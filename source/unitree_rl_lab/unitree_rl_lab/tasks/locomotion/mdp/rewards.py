@@ -63,6 +63,24 @@ def forward_velocity_deficit(
     return torch.where(target_speed > 1.0e-3, shortfall / target_speed, torch.zeros_like(target_speed))
 
 
+def forward_velocity_error_l2(
+    env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Return squared body-frame forward-speed tracking error."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    command_x = env.command_manager.get_command(command_name)[:, 0]
+    return torch.square(asset.data.root_lin_vel_b[:, 0] - command_x)
+
+
+def max_foot_air_time_penalty(
+    env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, max_air_time: float = 0.60
+) -> torch.Tensor:
+    """Penalize any foot remaining airborne long enough to create a three-leg gait."""
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    air_time = contact_sensor.data.current_air_time[:, sensor_cfg.body_ids]
+    return torch.sum(torch.square(torch.clamp(air_time - max_air_time, min=0.0)), dim=1)
+
+
 def yaw_rate_error_l2(
     env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
