@@ -35,6 +35,53 @@ def stand_still(
     return reward * (cmd_norm < 0.1)
 
 
+def dont_wait(
+    env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Penalize standing still when a meaningful forward command is present."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    command_x = env.command_manager.get_command(command_name)[:, 0]
+    velocity_x = asset.data.root_lin_vel_b[:, 0]
+    return (command_x > 0.2) * (
+        (velocity_x < 0.2).float() + (velocity_x < 0.0).float() + (velocity_x < -0.15).float()
+    )
+
+
+def forward_velocity_deficit(
+    env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Return the normalized forward-speed shortfall for nonzero forward commands.
+
+    Unlike an exponential tracking reward, this keeps a standing robot costly
+    even when the requested speed is modest. It is used only by the first
+    B2RM gait-learning stage, where every command requests forward motion.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    command_x = env.command_manager.get_command(command_name)[:, 0]
+    target_speed = torch.clamp(command_x, min=0.0)
+    shortfall = torch.clamp(target_speed - asset.data.root_lin_vel_b[:, 0], min=0.0)
+    return torch.where(target_speed > 1.0e-3, shortfall / target_speed, torch.zeros_like(target_speed))
+
+
+def must_turn(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    cmd_threshold: float = 0.05,
+    min_turn_rate: float = 0.05,
+    target_ratio: float = 0.6,
+) -> torch.Tensor:
+    """Penalize failure to turn in the commanded yaw direction."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    yaw_command = env.command_manager.get_command(command_name)[:, 2]
+    signed_turn_rate = torch.sign(yaw_command) * asset.data.root_ang_vel_b[:, 2]
+    target_rate = torch.maximum(
+        torch.full_like(yaw_command, min_turn_rate), target_ratio * torch.abs(yaw_command)
+    )
+    penalty = torch.clamp(target_rate - signed_turn_rate, min=0.0) / torch.clamp(target_rate, min=1.0e-6)
+    return (torch.abs(yaw_command) > cmd_threshold).float() * penalty
+
+
 """
 Robot.
 """

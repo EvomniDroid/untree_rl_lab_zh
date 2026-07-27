@@ -27,7 +27,10 @@ class UnitreeArticulationCfg(ArticulationCfg):
     soft_joint_pos_limit_factor = 0.9
 
 
-UNITREE_MODEL_DIR = MISSING
+UNITREE_MODEL_DIR = "/home/zh/isaac/unitree_rl_lab/unitree_model"
+
+# B1Z1: 这里使用项目内的 USD（用户提供路径）。
+UNITREE_B1Z1_USD_PATH = f"{UNITREE_MODEL_DIR}/b1z1/b1z1.usd"
 
 UNITREE_GO2_CFG = UnitreeArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
@@ -71,6 +74,70 @@ UNITREE_GO2_CFG = UnitreeArticulationCfg(
         "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
         "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
         "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint"
+    ],
+    # fmt: on
+)
+
+
+# NOTE:
+# B1Z1 是“狗 + Z1 机械臂”的组合模型。不同版本 USD 的关节命名可能略有差异。
+# 这里先用一个保守的 actuator 配置覆盖全部关节（让 env 能跑起来），后续再根据 joint_names
+# 把腿/臂分组并填更精确的 stiffness/damping/effort_limit。
+UNITREE_B1Z1_CFG = UnitreeArticulationCfg(
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=UNITREE_B1Z1_USD_PATH,
+        activate_contact_sensors=True,
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            disable_gravity=False,
+            retain_accelerations=False,
+            linear_damping=0.0,
+            angular_damping=0.0,
+            max_linear_velocity=100.0,
+            max_angular_velocity=100.0,
+            max_depenetration_velocity=1.0,
+        ),
+        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+            enabled_self_collisions=True, solver_position_iteration_count=4, solver_velocity_iteration_count=0
+        ),
+    ),
+    init_state=ArticulationCfg.InitialStateCfg(
+        # 大部分 B1 系列 base height 0.4~0.45 比较稳
+        pos=(0.0, 0.0, 0.42),
+        # 先给一个“狗站立 + 手臂收起”的近似姿态（匹配不了也没关系：不匹配的正则不会生效）
+        joint_pos={
+            # legs (b1/go2 风格命名)
+            ".*R_hip_joint": -0.1,
+            ".*L_hip_joint": 0.1,
+            "F[L,R]_thigh_joint": 0.8,
+            "R[L,R]_thigh_joint": 1.0,
+            ".*_calf_joint": -1.5,
+            # arm (z1 常见命名)
+            ".*shoulder.*": 0.0,
+            ".*elbow.*": -1.0,
+            ".*wrist.*": 0.0,
+        },
+        joint_vel={".*": 0.0},
+    ),
+    actuators={
+        # 先用 UnitreeActuator(带扭矩-转速曲线) 覆盖所有关节，保持与 go2 一致。
+        "B1Z1": unitree_actuators.UnitreeActuatorCfg_Go2HV(
+            joint_names_expr=[".*"],
+            stiffness=25.0,
+            damping=0.5,
+            friction=0.01,
+        ),
+    },
+    # joint_sdk_names 会被 utils/export_deploy_cfg.py 用来生成“关节名 -> SDK 名”的映射。
+    # 为了让 resolve_matching_names 100% 匹配，这里直接使用 USD 里能看到的 joint_names。
+    # （从训练输出可见：b1z1.usd 当前 joint_names 正好是 19 个：12 腿 + 6 臂 + 1 gripper）
+    # fmt: off
+    joint_sdk_names=[
+        "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
+        "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
+        "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
+        "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
+        "z1_joint1", "z1_joint2", "z1_joint3", "z1_joint4", "z1_joint5", "z1_joint6",
+        "z1_gripper",
     ],
     # fmt: on
 )

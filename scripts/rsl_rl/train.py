@@ -71,6 +71,7 @@ if args_cli.distributed and version.parse(installed_version) < version.parse(RSL
 import gymnasium as gym
 import inspect
 import os
+import pickle
 import shutil
 import torch
 from datetime import datetime
@@ -86,7 +87,7 @@ from isaaclab.envs import (
     multi_agent_to_single_agent,
 )
 from isaaclab.utils.dict import print_dict
-from isaaclab.utils.io import dump_pickle, dump_yaml
+from isaaclab.utils.io import dump_yaml
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
@@ -98,6 +99,91 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
+
+
+def dump_pickle(filename: str, data):
+    """Save a config pickle across IsaacLab versions that removed this helper."""
+    if not filename.endswith(".pkl"):
+        filename += ".pkl"
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    with open(filename, "wb") as file:
+        pickle.dump(data, file)
+
+
+def _run_play_mode():
+    """Run a lightweight visualization-only loop.
+
+    This intentionally bypasses Hydra because the shorthand override `env=play`
+    would otherwise replace the `env` dict with a string and crash during `env_cfg.from_dict(...)`.
+    """
+    from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
+
+    # Prefer the task's play config if it exists (usually fewer envs, simpler terrain, better defaults for GUI).
+    try:
+        play_cfg = load_cfg_from_registry(args_cli.task, "play_env_cfg_entry_point")
+    except Exception:
+        play_cfg = load_cfg_from_registry(args_cli.task, "env_cfg_entry_point")
+    play_cfg.scene.num_envs = 1 if args_cli.num_envs is None else args_cli.num_envs
+    play_cfg.sim.device = args_cli.device if args_cli.device is not None else play_cfg.sim.device
+    # Make sure rendering updates regularly in GUI.
+    if getattr(play_cfg.sim, "render_interval", None) is None or play_cfg.sim.render_interval <= 0:
+        play_cfg.sim.render_interval = 1
+    # In play mode, prefer realtime stepping if supported.
+    if hasattr(play_cfg.sim, "use_fabric"):
+        pass
+
+    env = gym.make(args_cli.task, cfg=play_cfg)
+    try:
+        env.reset()
+        # Kick the simulation once so that spawns and rendering settle.
+        # IMPORTANT: IsaacLab manager-based env expects actions shaped (num_envs, total_action_dim).
+        num_envs = int(getattr(play_cfg.scene, "num_envs", 1))
+        action_dim = getattr(getattr(env.unwrapped, "action_manager", None), "total_action_dim", None)
+        if action_dim is None:
+            # Fallback to action_space shape (usually (action_dim,))
+            act_shape = getattr(env.action_space, "shape", None)
+            if act_shape is None:
+                act_shape = torch.as_tensor(env.action_space.sample()).shape
+            action_dim = int(act_shape[0])
+
+        zero_action = torch.zeros((num_envs, int(action_dim)), device=play_cfg.sim.device, dtype=torch.float32)
+        env.step(zero_action)
+        while simulation_app.is_running():
+            # IsaacLab env expects torch Tensor actions (it calls action.to(self.device)).
+            # Gymnasium spaces typically return numpy arrays.
+            action_np = env.action_space.sample()
+            action = torch.as_tensor(action_np, dtype=torch.float32, device=play_cfg.sim.device)
+            # Normalize action shape to (num_envs, action_dim).
+            if action.ndim == 1:
+                action = action.unsqueeze(0)
+            # Some spaces may return shape (1, action_dim) even when num_envs==1.
+            if action.shape[0] != num_envs:
+                if action.shape[0] == 1:
+                    action = action.repeat(num_envs, 1)
+                else:
+                    action = action[:num_envs]
+            # Last line of defense: enforce correct width.
+            if action.shape[1] != int(action_dim):
+                # If space gives (num_envs, 1) but env expects (num_envs, action_dim), expand zeros.
+                fixed = torch.zeros((num_envs, int(action_dim)), device=play_cfg.sim.device, dtype=torch.float32)
+                w = min(int(action_dim), int(action.shape[1]))
+                fixed[:, :w] = action[:, :w]
+                action = fixed
+            _, _, terminated, truncated, _ = env.step(action)
+            if terminated or truncated:
+                env.reset()
+    finally:
+        env.close()
+
+
+# NOTE:
+# Hydra 中的 shorthand override `env=play` 会把 env 从 dict 覆盖成 str，导致
+# isaaclab_tasks/utils/hydra.py 里 env_cfg.from_dict(hydra_env_cfg["env"]) 崩溃。
+# 因此如果检测到 `env=play`，我们直接绕过 Hydra，进入可视化 loop。
+if any(arg.strip() == "env=play" for arg in hydra_args):
+    _run_play_mode()
+    simulation_app.close()
+    raise SystemExit(0)
 
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")

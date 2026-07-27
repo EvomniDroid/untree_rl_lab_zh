@@ -21,8 +21,25 @@ def format_value(x):
 
 def export_deploy_cfg(env: ManagerBasedRLEnv, log_dir):
     asset: Articulation = env.scene["robot"]
+    # NOTE:
+    # 这里的 joint_sdk_names 最初用于“USD joint_names -> SDK joint_names”的映射导出。
+    # 但在一些模型/配置里这个字段可能为空，或包含会被当作正则表达式的字符串，导致匹配失败。
+    # 为了让训练链路不被 deploy 导出阻塞，这里做一个保守回退：
+    # - 如果 cfg 里没给（None/空），就直接用 USD 里的 joint_names（等价映射）。
+    # - 如果 cfg 给了，但 resolve_matching_names 报错，同样回退到等价映射。
     joint_sdk_names = env.cfg.scene.robot.joint_sdk_names
-    joint_ids_map, _ = resolve_matching_names(asset.data.joint_names, joint_sdk_names, preserve_order=True)
+    if not joint_sdk_names:
+        joint_sdk_names = list(asset.data.joint_names)
+
+    try:
+        joint_ids_map, _ = resolve_matching_names(asset.data.joint_names, joint_sdk_names, preserve_order=True)
+    except Exception as e:
+        print(
+            "[WARN] export_deploy_cfg: joint_sdk_names 匹配失败，将回退为使用 asset.data.joint_names 进行等价映射。"
+        )
+        print(f"[WARN] export_deploy_cfg: {type(e).__name__}: {e}")
+        joint_sdk_names = list(asset.data.joint_names)
+        joint_ids_map = list(range(len(joint_sdk_names)))
 
     cfg = {}  # noqa: SIM904
     cfg["joint_ids_map"] = joint_ids_map
@@ -52,6 +69,11 @@ def export_deploy_cfg(env: ManagerBasedRLEnv, log_dir):
     action_terms = zip(action_names, env.action_manager._terms.values())
     cfg["actions"] = {}
     for action_name, action_term in action_terms:
+        # Some environments use zero-dimensional action terms to hold auxiliary
+        # joints (for example a folded arm) outside the learned policy.  They
+        # intentionally have no deployable action vector entry.
+        if action_term.action_dim == 0:
+            continue
         term_cfg = action_term.cfg.copy()
         if isinstance(term_cfg.scale, float):
             term_cfg.scale = [term_cfg.scale for _ in range(action_term.action_dim)]
