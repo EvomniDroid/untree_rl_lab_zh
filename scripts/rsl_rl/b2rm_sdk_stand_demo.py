@@ -71,6 +71,11 @@ def main() -> None:
     env_cfg.sim.render_interval = 1
     env_cfg.scene.contact_forces.update_period = env_cfg.sim.dt
     env_cfg.scene.base_ground_contact.update_period = env_cfg.sim.dt
+    # This script validates the SDK stand controller, not the learned-policy
+    # controller. Override the task's softer policy gains explicitly.
+    for actuator_name in ("legs_hip", "legs_thigh", "legs_calf"):
+        env_cfg.scene.robot.actuators[actuator_name].stiffness = 1000.0
+        env_cfg.scene.robot.actuators[actuator_name].damping = 10.0
     # Permit the exact SDK crouch/down poses. These limits apply after the
     # residual action has been converted back into a joint target.
     env_cfg.actions.leg_joint_pos.clip = {

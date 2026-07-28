@@ -95,19 +95,20 @@ UNITREE_B2RM_CFG = UnitreeArticulationCfg(
         joint_vel={".*": 0.0},
     ),
     actuators={
-        # Match the B2 low-level stand controller: Kp=1000, Kd=10 and no
-        # command delay. The learned policy provides small residual targets.
+        # Policy-phase gains match the converged InstinctLab B2RM Parkour
+        # controller. Deployment uses 1000/10 only for target2 stand-up, then
+        # blends to these gains before enabling learned residual actions.
         "legs_hip": DelayedPDActuatorCfg(
             joint_names_expr=[".*_hip_joint"], effort_limit=200.0, velocity_limit=23.0,
-            stiffness=1000.0, damping=10.0, armature=0.025101925, min_delay=0, max_delay=0,
+            stiffness=99.09843, damping=6.30880, armature=0.025101925, min_delay=0, max_delay=0,
         ),
         "legs_thigh": DelayedPDActuatorCfg(
             joint_names_expr=[".*_thigh_joint"], effort_limit=200.0, velocity_limit=23.0,
-            stiffness=1000.0, damping=10.0, armature=0.010177520, min_delay=0, max_delay=0,
+            stiffness=40.17924, damping=2.55789, armature=0.010177520, min_delay=0, max_delay=0,
         ),
         "legs_calf": DelayedPDActuatorCfg(
             joint_names_expr=[".*_calf_joint"], effort_limit=320.0, velocity_limit=14.0,
-            stiffness=1000.0, damping=10.0, armature=0.025101925, min_delay=0, max_delay=0,
+            stiffness=99.09843, damping=6.30880, armature=0.025101925, min_delay=0, max_delay=0,
         ),
         # The arm is not a policy action. Keep its folded target firmly fixed.
         "arm_hold": DelayedPDActuatorCfg(

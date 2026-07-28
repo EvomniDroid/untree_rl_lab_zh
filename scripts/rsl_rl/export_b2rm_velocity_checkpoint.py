@@ -83,8 +83,20 @@ def write_metadata(path: Path, checkpoint: Path, actor: torch.nn.Sequential) -> 
         "default_leg_joint_pos": [0.0] * 4 + [0.67] * 4 + [-1.30] * 4,
         "action_scale": 0.2,
         "action_clip": 2.0,
-        "leg_kp": 1000.0,
-        "leg_kd": 10.0,
+        "stand_leg_kp": 1000.0,
+        "stand_leg_kd": 10.0,
+        "policy_leg_kp": {
+            "hip": 99.09843,
+            "thigh": 40.17924,
+            "calf": 99.09843,
+        },
+        "policy_leg_kd": {
+            "hip": 6.30880,
+            "thigh": 2.55789,
+            "calf": 6.30880,
+        },
+        "gain_blend_seconds": 1.0,
+        "policy_blend_seconds": 1.5,
     }
     path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 
