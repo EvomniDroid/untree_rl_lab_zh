@@ -57,7 +57,7 @@ class B2RMSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class EventCfg:
-    """Only deterministic reset; no pushes, mass/friction randomization or noise events."""
+    """Deterministic reset for the first real walking policy."""
 
     reset_to_standing_default = EventTerm(
         func=mdp.reset_scene_to_default,
@@ -72,9 +72,9 @@ class CommandsCfg:
         resampling_time_range=(8.0, 8.0),
         rel_standing_envs=0.0,
         debug_vis=True,
-        # Stage 1 deliberately contains only meaningful forward commands. A
-        # zero/yaw command mix lets a high-PD quadruped earn reward by merely
-        # finding a static stance before it has learned a gait.
+        # No standing commands: a high-PD quadruped otherwise finds a static
+        # stance before it has learned a gait.  This first policy only learns
+        # forward walking; lateral and yaw tracking come in a later run.
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(0.10, 0.40), lin_vel_y=(0.0, 0.0), ang_vel_z=(0.0, 0.0)
         ),
@@ -163,8 +163,11 @@ class RewardsCfg:
     # Flat-ground subset of the final B2RM Parkour reward configuration.
     # Terrain/vision/arm terms are intentionally omitted.
     track_lin_vel_xy = RewTerm(
-        func=mdp.track_lin_vel_xy_exp, weight=4.0,
-        params={"command_name": "base_velocity", "std": 0.5},
+        # A broad kernel made zero velocity nearly as rewarding as 0.1--0.2 m/s.
+        # Keep this sharp enough that tracking, rather than static standing,
+        # dominates the early gait-learning objective.
+        func=mdp.track_lin_vel_xy_exp, weight=6.0,
+        params={"command_name": "base_velocity", "std": 0.25},
     )
     track_ang_vel_z = RewTerm(
         func=mdp.track_ang_vel_z_exp, weight=2.0,
@@ -173,31 +176,34 @@ class RewardsCfg:
     heading_error = RewTerm(
         func=mdp.heading_error, weight=-1.5, params={"command_name": "base_velocity"}
     )
-    dont_wait = RewTerm(
-        func=mdp.dont_wait, weight=-2.0, params={"command_name": "base_velocity"}
+    forward_velocity_deficit = RewTerm(
+        # Unlike dont_wait, this applies at every positive command, including
+        # the 0.10--0.20 m/s commands used for initial real-robot tests.
+        func=mdp.forward_velocity_deficit, weight=-3.0,
+        params={"command_name": "base_velocity"},
     )
     is_alive = RewTerm(func=mdp.is_alive, weight=2.0)
     feet_air_time = RewTerm(
         func=mdp.parkour_feet_air_time,
-        weight=0.5,
+        weight=0.2,
         params={
             "command_name": "base_velocity",
             "sensor_cfg": ORDERED_FEET_CFG,
-            "vel_threshold": 0.15,
+            "vel_threshold": 0.05,
         },
     )
     foot_contact_balance = RewTerm(
         func=mdp.foot_contact_balance,
-        weight=-2.0,
-        params={"sensor_cfg": ORDERED_FEET_CFG, "max_air_time": 1.0},
+        weight=-0.5,
+        params={"sensor_cfg": ORDERED_FEET_CFG, "max_air_time": 0.75},
     )
     feet_air_time_balance = RewTerm(
         func=mdp.feet_air_time_balance,
-        weight=-1.0,
+        weight=-0.25,
         params={
             "command_name": "base_velocity",
             "sensor_cfg": ORDERED_FEET_CFG,
-            "vel_threshold": 0.15,
+            "vel_threshold": 0.05,
         },
     )
     feet_slide = RewTerm(
@@ -217,16 +223,18 @@ class RewardsCfg:
     joint_torques = RewTerm(func=mdp.joint_torques_l2, weight=-2.5e-5, params={"asset_cfg": LEG_CFG})
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-7.5e-7, params={"asset_cfg": LEG_CFG})
     joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-1.0e-4, params={"asset_cfg": LEG_CFG})
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
+    # A gait requires alternating targets. This should smooth commands, not
+    # make a constant standing target the cheapest solution.
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
     joint_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-1.0, params={"asset_cfg": LEG_CFG})
     flat_orientation = RewTerm(func=mdp.flat_orientation_l2, weight=-2.5)
     base_pitch = RewTerm(func=mdp.positive_pitch_l2, weight=-2.0)
     # The validated target2 PD stand settles at base_link z about 0.58 m.
-    base_height = RewTerm(func=mdp.base_height_l2, weight=-4.0, params={"target_height": 0.58})
-    joint_deviation = RewTerm(func=mdp.joint_deviation_l1, weight=-0.1, params={"asset_cfg": LEG_CFG})
+    base_height = RewTerm(func=mdp.base_height_l2, weight=-2.0, params={"target_height": 0.58})
+    joint_deviation = RewTerm(func=mdp.joint_deviation_l1, weight=-0.03, params={"asset_cfg": LEG_CFG})
     trot_gait = RewTerm(
         func=mdp.feet_gait,
-        weight=1.0,
+        weight=1.5,
         params={
             "period": 0.6,
             # Explicit FL, FR, RL, RR order: the two diagonal pairs alternate.
@@ -238,7 +246,7 @@ class RewardsCfg:
     )
     feet_height = RewTerm(
         func=mdp.swing_foot_clearance,
-        weight=1.0,
+        weight=0.5,
         params={
             "command_name": "base_velocity",
             "asset_cfg": ORDERED_FEET_BODY_CFG,
@@ -249,7 +257,7 @@ class RewardsCfg:
     )
     feet_height_balance = RewTerm(
         func=mdp.feet_height_balance,
-        weight=-4.0,
+        weight=-0.5,
         params={
             "command_name": "base_velocity",
             "asset_cfg": ORDERED_FEET_BODY_CFG,
@@ -271,7 +279,7 @@ class RewardsCfg:
     )
     tracking_contacts_force = RewTerm(
         func=mdp.tracking_contacts_shaped_force,
-        weight=-2.0,
+        weight=-0.5,
         params={
             "command_name": "base_velocity",
             "sensor_cfg": ORDERED_FEET_CFG,
@@ -281,18 +289,13 @@ class RewardsCfg:
     )
     tracking_contacts_vel = RewTerm(
         func=mdp.tracking_contacts_shaped_vel,
-        weight=-2.0,
+        weight=-0.5,
         params={
             "command_name": "base_velocity",
             "asset_cfg": ORDERED_FEET_BODY_CFG,
             "sensor_cfg": ORDERED_FEET_CFG,
             "sigma": 0.5,
         },
-    )
-    walking_dof = RewTerm(
-        func=mdp.walking_dof,
-        weight=0.1,
-        params={"command_name": "base_velocity", "asset_cfg": LEG_CFG},
     )
 
 

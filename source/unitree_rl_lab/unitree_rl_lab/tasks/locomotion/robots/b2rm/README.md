@@ -1,10 +1,19 @@
-# B2RM Minimal Velocity Task
+# B2RM No-Vision Locomotion Task
 
-`Unitree-B2RM-Velocity` is a deliberately small baseline for validating the
-official Unitree RL Lab train/export workflow with the B2RM model.
+`Unitree-B2RM-Velocity` is the no-vision locomotion stage for B2RM.  It is
+intended to establish a real-robot-compatible trot and velocity controller
+before adding the depth encoder used by the full Parkour task.
 
-- Flat terrain only; no cameras, depth, terrain curriculum, random pushes, or
-  dynamics randomization.
+- Flat terrain only; no cameras, depth, terrain curriculum, gaps, or steps.
+- Training commands are forward velocity only, uniformly sampled from
+  `0.10` to `0.40 m/s`.  This makes learning a real walking gait the sole
+  first-stage objective.
+- The policy receives a sine/cosine gait phase and is rewarded for diagonal
+  trot contacts.  It is penalized whenever measured forward velocity remains
+  below a positive command, so a static target2 stance is not a good solution.
+- No friction, mass, push, delay, or observation-noise randomization is used
+  in this first walking stage.  Add those only after this policy walks in
+  simulation and on the robot.
 - The policy has 12 outputs for the leg joints only.
 - The six arm joints remain in the folded B2RM pose through a zero-dimensional
   `ArmHold` action term and their own PD gains.
@@ -24,7 +33,7 @@ cd /home/zh/isaac/unitree_rl_lab
 # First confirm the task is registered.
 python scripts/list_envs.py
 
-# Train the flat-ground velocity baseline.
+# Train the no-vision locomotion policy.
 python scripts/rsl_rl/train.py \
   --task Unitree-B2RM-Velocity \
   --headless \
@@ -53,3 +62,8 @@ The existing official `b2` deploy controller is 12-leg-DOF only. A B2RM
 sim2sim/real bridge must therefore send the extra six fixed arm commands as
 well; this task intentionally does not pretend the stock B2 controller can do
 that unchanged.
+
+This task has a 50-dimensional policy observation: the 48 proprioceptive
+values plus sine/cosine gait phase.  The real deployment program must load a
+50-input ONNX policy and use the same 0.6 s gait period.  Do not load an older
+48-input checkpoint into that program.
