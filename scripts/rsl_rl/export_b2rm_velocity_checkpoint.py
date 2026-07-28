@@ -64,6 +64,7 @@ def write_metadata(path: Path, checkpoint: Path, actor: torch.nn.Sequential) -> 
             {"name": "leg_joint_pos_relative", "size": 12, "scale": 1.0},
             {"name": "leg_joint_vel", "size": 12, "scale": 0.05},
             {"name": "last_raw_action", "size": 12, "scale": 1.0},
+            {"name": "gait_phase_sin_cos", "size": 2, "scale": 1.0, "period": 0.6},
         ],
         "isaac_leg_order": [
             "FL_hip",
