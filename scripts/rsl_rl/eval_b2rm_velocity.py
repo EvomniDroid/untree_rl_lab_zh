@@ -50,15 +50,13 @@ def main() -> None:
     command.resampling_time_range = (args_cli.duration + 1.0, args_cli.duration + 1.0)
     command.debug_vis = True
 
-    env = gym.make(args_cli.task, cfg=env_cfg)
-    # Match training exactly.  The runner was trained with clip_actions=None;
-    # clipping the actor's raw output here changes its position targets before
-    # the environment applies its own configured joint-target limits.
-    env = RslRlVecEnvWrapper(env, clip_actions=None)
-    checkpoint = os.path.abspath(args_cli.checkpoint)
     agent_cfg = load_cfg_from_registry(args_cli.task, "rsl_rl_cfg_entry_point")
     if agent_cfg.experiment_name == "":
         agent_cfg.experiment_name = args_cli.task.lower().replace("-", "_")
+    env = gym.make(args_cli.task, cfg=env_cfg)
+    # Match the action bound used by the checkpoint's training configuration.
+    env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+    checkpoint = os.path.abspath(args_cli.checkpoint)
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     runner.load(checkpoint)
     policy = runner.get_inference_policy(device=env.unwrapped.device)
@@ -76,7 +74,12 @@ def main() -> None:
         for step in range(steps):
             start_time = time.time()
             with torch.inference_mode():
-                actions = policy(obs)
+                raw_actions = policy(obs)
+                actions = torch.clamp(
+                    raw_actions,
+                    -agent_cfg.clip_actions,
+                    agent_cfg.clip_actions,
+                ) if agent_cfg.clip_actions is not None else raw_actions
                 if actions.ndim == 1:
                     actions = actions.unsqueeze(0)
                 obs, _, dones, _ = env.step(actions)

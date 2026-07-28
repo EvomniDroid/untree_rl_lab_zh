@@ -10,8 +10,13 @@ from unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg import BasePPORunnerC
 class B2RMVelocityPPORunnerCfg(BasePPORunnerCfg):
     """Use gentler exploration than the generic locomotion default."""
 
+    # The action manager still applies per-joint absolute target limits. This
+    # bound also keeps last_action observations and exported deployment inputs
+    # consistent instead of allowing raw actor outputs to grow beyond +/-3.
+    clip_actions = 2.0
+
     policy = RslRlPpoActorCriticCfg(
-        init_noise_std=0.60,
+        init_noise_std=0.35,
         actor_hidden_dims=[512, 256, 128],
         critic_hidden_dims=[512, 256, 128],
         activation="elu",

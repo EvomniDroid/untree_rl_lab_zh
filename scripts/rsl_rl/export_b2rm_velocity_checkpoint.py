@@ -82,6 +82,7 @@ def write_metadata(path: Path, checkpoint: Path, actor: torch.nn.Sequential) -> 
         ],
         "default_leg_joint_pos": [0.0] * 4 + [0.67] * 4 + [-1.30] * 4,
         "action_scale": 0.2,
+        "action_clip": 2.0,
         "leg_kp": 1000.0,
         "leg_kd": 10.0,
     }

@@ -179,10 +179,18 @@ class RewardsCfg:
     forward_velocity_deficit = RewTerm(
         # Unlike dont_wait, this applies at every positive command, including
         # the 0.10--0.20 m/s commands used for initial real-robot tests.
-        func=mdp.forward_velocity_deficit, weight=-3.0,
+        func=mdp.forward_velocity_deficit, weight=-2.0,
         params={"command_name": "base_velocity"},
     )
-    is_alive = RewTerm(func=mdp.is_alive, weight=2.0)
+    is_alive = RewTerm(func=mdp.is_alive, weight=4.0)
+    termination_penalty = RewTerm(
+        # With dt=0.02 this applies a -20 terminal reward. The previous task
+        # had no explicit terminal cost and learned to fall forward after
+        # roughly four seconds while briefly matching commanded velocity.
+        func=mdp.is_terminated_term,
+        weight=-1000.0,
+        params={"term_keys": ["base_contact", "bad_orientation"]},
+    )
     feet_air_time = RewTerm(
         func=mdp.parkour_feet_air_time,
         weight=0.2,
@@ -216,7 +224,7 @@ class RewardsCfg:
         },
     )
     # Keep a light deployment guard without suppressing useful stride length.
-    action_magnitude = RewTerm(func=mdp.action_l2, weight=-0.03)
+    action_magnitude = RewTerm(func=mdp.action_l2, weight=-0.10)
     ang_vel_xy = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.2)
     lin_vel_z = RewTerm(func=mdp.lin_vel_z_l2, weight=-1.5)
     roll = RewTerm(func=mdp.roll_l1, weight=-2.0)
@@ -227,8 +235,8 @@ class RewardsCfg:
     # make a constant standing target the cheapest solution.
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
     joint_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-1.0, params={"asset_cfg": LEG_CFG})
-    flat_orientation = RewTerm(func=mdp.flat_orientation_l2, weight=-2.5)
-    base_pitch = RewTerm(func=mdp.positive_pitch_l2, weight=-2.0)
+    flat_orientation = RewTerm(func=mdp.flat_orientation_l2, weight=-5.0)
+    base_pitch = RewTerm(func=mdp.positive_pitch_l2, weight=-4.0)
     # The validated target2 PD stand settles at base_link z about 0.58 m.
     base_height = RewTerm(func=mdp.base_height_l2, weight=-2.0, params={"target_height": 0.58})
     joint_deviation = RewTerm(func=mdp.joint_deviation_l1, weight=-0.03, params={"asset_cfg": LEG_CFG})
@@ -302,7 +310,7 @@ class RewardsCfg:
 @configclass
 class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-    bad_orientation = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": 1.3})
+    bad_orientation = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": 0.9})
     base_contact = DoneTerm(
         func=mdp.illegal_contact,
         params={"sensor_cfg": SceneEntityCfg("base_ground_contact", body_names="base_link"), "threshold": 1.0},
