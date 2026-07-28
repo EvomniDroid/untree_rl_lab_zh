@@ -110,12 +110,12 @@ class ActionsCfg:
 
 
 LEG_CFG = SceneEntityCfg("robot", joint_names=LEG_JOINT_NAMES)
-FEET_CFG = SceneEntityCfg("contact_forces", body_names=".*_calf")
+FEET_CFG = SceneEntityCfg("contact_forces", body_names=".*_foot")
 ORDERED_FEET_CFG = SceneEntityCfg(
-    "contact_forces", body_names=["FL_calf", "FR_calf", "RL_calf", "RR_calf"], preserve_order=True
+    "contact_forces", body_names=["FL_foot", "FR_foot", "RL_foot", "RR_foot"], preserve_order=True
 )
 ORDERED_FEET_BODY_CFG = SceneEntityCfg(
-    "robot", body_names=["FL_calf", "FR_calf", "RL_calf", "RR_calf"], preserve_order=True
+    "robot", body_names=["FL_foot", "FR_foot", "RL_foot", "RR_foot"], preserve_order=True
 )
 
 
@@ -189,7 +189,15 @@ class RewardsCfg:
         # roughly four seconds while briefly matching commanded velocity.
         func=mdp.is_terminated_term,
         weight=-1000.0,
-        params={"term_keys": ["base_contact", "bad_orientation"]},
+        params={
+            "term_keys": [
+                "root_height",
+                "base_contact",
+                "leg_link_contact",
+                "calf_link_contact",
+                "bad_orientation",
+            ]
+        },
     )
     feet_air_time = RewTerm(
         func=mdp.parkour_feet_air_time,
@@ -310,6 +318,21 @@ class RewardsCfg:
 @configclass
 class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    root_height = DoneTerm(func=mdp.root_height_below_minimum, params={"minimum_height": 0.25})
+    leg_link_contact = DoneTerm(
+        func=mdp.illegal_contact,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=[".*_thigh"]),
+            "threshold": 15.0,
+        },
+    )
+    calf_link_contact = DoneTerm(
+        func=mdp.illegal_contact,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=[".*_calf"]),
+            "threshold": 50.0,
+        },
+    )
     # Match the converged B2RM Parkour task. Base contact and the explicit
     # terminal penalty still reject falls, while 1.3 rad leaves room to
     # recover from transient tilt during early gait exploration.
