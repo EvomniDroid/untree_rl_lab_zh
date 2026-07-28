@@ -73,10 +73,10 @@ class CommandsCfg:
         rel_standing_envs=0.0,
         debug_vis=True,
         # No standing commands: a high-PD quadruped otherwise finds a static
-        # stance before it has learned a gait.  This first policy only learns
-        # forward walking; lateral and yaw tracking come in a later run.
+        # stance before it has learned a gait. Start with modest forward
+        # speeds so exploration under the real-robot Kp/Kd does not saturate.
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(0.10, 0.40), lin_vel_y=(0.0, 0.0), ang_vel_z=(0.0, 0.0)
+            lin_vel_x=(0.05, 0.20), lin_vel_y=(0.0, 0.0), ang_vel_z=(0.0, 0.0)
         ),
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(-0.50, 0.80), lin_vel_y=(-0.25, 0.25), ang_vel_z=(-0.60, 0.60)
@@ -310,7 +310,10 @@ class RewardsCfg:
 @configclass
 class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-    bad_orientation = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": 0.9})
+    # Match the converged B2RM Parkour task. Base contact and the explicit
+    # terminal penalty still reject falls, while 1.3 rad leaves room to
+    # recover from transient tilt during early gait exploration.
+    bad_orientation = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": 1.3})
     base_contact = DoneTerm(
         func=mdp.illegal_contact,
         params={"sensor_cfg": SceneEntityCfg("base_ground_contact", body_names="base_link"), "threshold": 1.0},

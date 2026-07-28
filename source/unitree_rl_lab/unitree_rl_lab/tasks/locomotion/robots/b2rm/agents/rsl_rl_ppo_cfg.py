@@ -16,7 +16,10 @@ class B2RMVelocityPPORunnerCfg(BasePPORunnerCfg):
     clip_actions = 2.0
 
     policy = RslRlPpoActorCriticCfg(
-        init_noise_std=0.35,
+        # With Kp=1000 and action_scale=0.20, std=0.35 already produces
+        # roughly 70 Nm RMS exploratory corrections. Start conservatively so
+        # the policy can discover a stable gait instead of saturating joints.
+        init_noise_std=0.15,
         actor_hidden_dims=[512, 256, 128],
         critic_hidden_dims=[512, 256, 128],
         activation="elu",
@@ -25,7 +28,9 @@ class B2RMVelocityPPORunnerCfg(BasePPORunnerCfg):
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
-        entropy_coef=0.005,
+        # Do not reward increasing action noise. The previous run grew from
+        # std=0.35 to about 0.91 and terminated on orientation every episode.
+        entropy_coef=0.0,
         num_learning_epochs=5,
         num_mini_batches=4,
         learning_rate=5.0e-4,
