@@ -486,8 +486,8 @@ UNITREE_G1_29DOF_CFG = UnitreeArticulationCfg(
     actuators={
         "N7520-14.3": ImplicitActuatorCfg(
             joint_names_expr=[".*_hip_pitch_.*", ".*_hip_yaw_.*", "waist_yaw_joint"],
-            effort_limit_sim=88,
-            velocity_limit_sim=32.0,
+            effort_limit=88,
+            velocity_limit=32.0,
             stiffness={
                 ".*_hip_.*": 100.0,
                 "waist_yaw_joint": 200.0,
@@ -500,8 +500,8 @@ UNITREE_G1_29DOF_CFG = UnitreeArticulationCfg(
         ),
         "N7520-22.5": ImplicitActuatorCfg(
             joint_names_expr=[".*_hip_roll_.*", ".*_knee_.*"],
-            effort_limit_sim=139,
-            velocity_limit_sim=20.0,
+            effort_limit=139,
+            velocity_limit=20.0,
             stiffness={
                 ".*_hip_roll_.*": 100.0,
                 ".*_knee_.*": 150.0,
@@ -521,8 +521,8 @@ UNITREE_G1_29DOF_CFG = UnitreeArticulationCfg(
                 "waist_roll_joint",
                 "waist_pitch_joint",
             ],
-            effort_limit_sim=25,
-            velocity_limit_sim=37,
+            effort_limit=25,
+            velocity_limit=37,
             stiffness=40.0,
             damping={
                 ".*_shoulder_.*": 10.0,
@@ -535,8 +535,8 @@ UNITREE_G1_29DOF_CFG = UnitreeArticulationCfg(
         ),
         "W4010-25": ImplicitActuatorCfg(
             joint_names_expr=[".*_wrist_pitch.*", ".*_wrist_yaw.*"],
-            effort_limit_sim=5,
-            velocity_limit_sim=22,
+            effort_limit=5,
+            velocity_limit=22,
             stiffness=40.0,
             damping=10.0,
             armature=0.01,

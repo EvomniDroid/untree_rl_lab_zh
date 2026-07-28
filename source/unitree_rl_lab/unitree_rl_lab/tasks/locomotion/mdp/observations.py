@@ -17,3 +17,9 @@ def gait_phase(env: ManagerBasedRLEnv, period: float) -> torch.Tensor:
     phase[:, 0] = torch.sin(global_phase * torch.pi * 2.0)
     phase[:, 1] = torch.cos(global_phase * torch.pi * 2.0)
     return phase
+
+
+def joint_effort(env: ManagerBasedRLEnv, asset_cfg) -> torch.Tensor:
+    """Return the actuator torque applied by the simulator for selected joints."""
+    asset = env.scene[asset_cfg.name]
+    return asset.data.applied_torque[:, asset_cfg.joint_ids]

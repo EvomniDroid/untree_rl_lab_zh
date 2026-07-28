@@ -62,7 +62,6 @@ class EventCfg:
     reset_to_standing_default = EventTerm(
         func=mdp.reset_scene_to_default,
         mode="reset",
-        params={"reset_joint_targets": True},
     )
 
 
@@ -111,12 +110,12 @@ class ActionsCfg:
 
 
 LEG_CFG = SceneEntityCfg("robot", joint_names=LEG_JOINT_NAMES)
-FEET_CFG = SceneEntityCfg("contact_forces", body_names=".*_foot")
+FEET_CFG = SceneEntityCfg("contact_forces", body_names=".*_calf")
 ORDERED_FEET_CFG = SceneEntityCfg(
-    "contact_forces", body_names=["FL_foot", "FR_foot", "RL_foot", "RR_foot"], preserve_order=True
+    "contact_forces", body_names=["FL_calf", "FR_calf", "RL_calf", "RR_calf"], preserve_order=True
 )
 ORDERED_FEET_BODY_CFG = SceneEntityCfg(
-    "robot", body_names=["FL_foot", "FR_foot", "RL_foot", "RR_foot"], preserve_order=True
+    "robot", body_names=["FL_calf", "FR_calf", "RL_calf", "RR_calf"], preserve_order=True
 )
 
 
