@@ -60,6 +60,11 @@ def main() -> None:
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     runner.load(checkpoint)
     policy = runner.get_inference_policy(device=env.unwrapped.device)
+    robot = env.unwrapped.scene["robot"]
+    contact_sensor = env.unwrapped.scene.sensors["contact_forces"]
+    foot_ids, _ = contact_sensor.find_bodies(
+        ["FL_foot", "FR_foot", "RL_foot", "RR_foot"], preserve_order=True
+    )
 
     try:
         # The current IsaacLab wrapper returns a batched TensorDict directly.
@@ -84,16 +89,24 @@ def main() -> None:
                     actions = actions.unsqueeze(0)
                 obs, _, dones, _ = env.step(actions)
             if step % max(1, round(1.0 / env.unwrapped.step_dt)) == 0:
-                robot = env.unwrapped.scene["robot"]
                 active_command = env.unwrapped.command_manager.get_command("base_velocity")[0]
                 velocity = robot.data.root_lin_vel_b[0]
                 yaw_rate = robot.data.root_ang_vel_b[0, 2]
+                gravity = robot.data.projected_gravity_b[0]
+                root_z = robot.data.root_pos_w[0, 2]
+                foot_forces = torch.linalg.vector_norm(
+                    contact_sensor.data.net_forces_w[0, foot_ids], dim=-1
+                )
+                contacts = "".join("1" if force.item() > 5.0 else "0" for force in foot_forces)
                 print(
                     f"[eval] t={(step + 1) * env.unwrapped.step_dt:5.1f}s "
                     f"cmd=({active_command[0].item():+.2f},{active_command[1].item():+.2f},"
                     f"{active_command[2].item():+.2f}) "
                     f"vel=({velocity[0].item():+.2f},{velocity[1].item():+.2f}) "
-                    f"wz={yaw_rate.item():+.2f} action=[{actions.min().item():+.2f},"
+                    f"wz={yaw_rate.item():+.2f} z={root_z.item():+.2f} "
+                    f"gravity=({gravity[0].item():+.2f},{gravity[1].item():+.2f},"
+                    f"{gravity[2].item():+.2f}) feet={contacts} "
+                    f"action=[{actions.min().item():+.2f},"
                     f"{actions.max().item():+.2f}] reset={bool(dones.any().item())}"
                 )
             if args_cli.real_time:

@@ -26,13 +26,27 @@ def energy(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("r
 
 
 def stand_still(
-    env: ManagerBasedRLEnv, command_name: str = "base_velocity", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+    env: ManagerBasedRLEnv,
+    command_name: str = "base_velocity",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    threshold: float = 0.15,
+    offset: float = 1.0,
 ) -> torch.Tensor:
+    """Penalize deviation from the nominal pose while velocity commands are near zero."""
     asset: Articulation = env.scene[asset_cfg.name]
 
-    reward = torch.sum(torch.abs(asset.data.joint_pos - asset.data.default_joint_pos), dim=1)
-    cmd_norm = torch.norm(env.command_manager.get_command(command_name), dim=1)
-    return reward * (cmd_norm < 0.1)
+    dof_error = torch.sum(
+        torch.abs(
+            asset.data.joint_pos[:, asset_cfg.joint_ids]
+            - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+        ),
+        dim=1,
+    )
+    command = env.command_manager.get_command(command_name)
+    is_standing_command = (torch.norm(command[:, :2], dim=1) < threshold) & (
+        torch.abs(command[:, 2]) < threshold
+    )
+    return (dof_error - offset) * is_standing_command.float()
 
 
 def dont_wait(
@@ -70,6 +84,14 @@ def forward_velocity_error_l2(
     asset: Articulation = env.scene[asset_cfg.name]
     command_x = env.command_manager.get_command(command_name)[:, 0]
     return torch.square(asset.data.root_lin_vel_b[:, 0] - command_x)
+
+
+def lateral_velocity_l2(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Penalize uncommanded body-frame lateral velocity."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    return torch.square(asset.data.root_lin_vel_b[:, 1])
 
 
 def max_foot_air_time_penalty(

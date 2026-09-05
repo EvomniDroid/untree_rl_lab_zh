@@ -72,11 +72,10 @@ class CommandsCfg:
         resampling_time_range=(8.0, 8.0),
         rel_standing_envs=0.0,
         debug_vis=True,
-        # No standing commands: a high-PD quadruped otherwise finds a static
-        # stance before it has learned a gait. Start with modest forward
-        # speeds so exploration under the real-robot Kp/Kd does not saturate.
+        # A heavy quadruped can satisfy very small commands by rocking or
+        # sliding. Start where a real swing phase is required.
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(0.05, 0.20), lin_vel_y=(0.0, 0.0), ang_vel_z=(0.0, 0.0)
+            lin_vel_x=(0.20, 0.50), lin_vel_y=(0.0, 0.0), ang_vel_z=(0.0, 0.0)
         ),
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(-0.50, 0.80), lin_vel_y=(-0.25, 0.25), ang_vel_z=(-0.60, 0.60)
@@ -117,6 +116,21 @@ ORDERED_FEET_CFG = SceneEntityCfg(
 ORDERED_FEET_BODY_CFG = SceneEntityCfg(
     "robot", body_names=["FL_foot", "FR_foot", "RL_foot", "RR_foot"], preserve_order=True
 )
+
+PARKOUR_LEG_POS = {
+    "FL_hip_joint": 0.10,
+    "FR_hip_joint": -0.10,
+    "RL_hip_joint": 0.10,
+    "RR_hip_joint": -0.10,
+    "FL_thigh_joint": 0.80,
+    "FR_thigh_joint": 0.80,
+    "RL_thigh_joint": 0.80,
+    "RR_thigh_joint": 0.80,
+    "FL_calf_joint": -1.50,
+    "FR_calf_joint": -1.50,
+    "RL_calf_joint": -1.50,
+    "RR_calf_joint": -1.50,
+}
 
 
 @configclass
@@ -166,8 +180,8 @@ class RewardsCfg:
         # A broad kernel made zero velocity nearly as rewarding as 0.1--0.2 m/s.
         # Keep this sharp enough that tracking, rather than static standing,
         # dominates the early gait-learning objective.
-        func=mdp.track_lin_vel_xy_exp, weight=6.0,
-        params={"command_name": "base_velocity", "std": 0.25},
+        func=mdp.track_lin_vel_xy_exp, weight=8.0,
+        params={"command_name": "base_velocity", "std": 0.20},
     )
     track_ang_vel_z = RewTerm(
         func=mdp.track_ang_vel_z_exp, weight=2.0,
@@ -182,7 +196,18 @@ class RewardsCfg:
         func=mdp.forward_velocity_deficit, weight=-2.0,
         params={"command_name": "base_velocity"},
     )
-    is_alive = RewTerm(func=mdp.is_alive, weight=4.0)
+    forward_velocity_error = RewTerm(
+        func=mdp.forward_velocity_error_l2,
+        weight=-4.0,
+        params={"command_name": "base_velocity"},
+    )
+    lateral_velocity = RewTerm(func=mdp.lateral_velocity_l2, weight=-4.0)
+    yaw_rate_error = RewTerm(
+        func=mdp.yaw_rate_error_l2,
+        weight=-1.0,
+        params={"command_name": "base_velocity"},
+    )
+    is_alive = RewTerm(func=mdp.is_alive, weight=1.0)
     termination_penalty = RewTerm(
         # With dt=0.02 this applies a -20 terminal reward. The previous task
         # had no explicit terminal cost and learned to fall forward after
@@ -200,12 +225,12 @@ class RewardsCfg:
         },
     )
     feet_air_time = RewTerm(
-        func=mdp.parkour_feet_air_time,
+        func=mdp.feet_air_time,
         weight=0.2,
         params={
             "command_name": "base_velocity",
             "sensor_cfg": ORDERED_FEET_CFG,
-            "vel_threshold": 0.05,
+            "threshold": 0.10,
         },
     )
     foot_contact_balance = RewTerm(
@@ -248,18 +273,6 @@ class RewardsCfg:
     # The validated target2 PD stand settles at base_link z about 0.58 m.
     base_height = RewTerm(func=mdp.base_height_l2, weight=-2.0, params={"target_height": 0.58})
     joint_deviation = RewTerm(func=mdp.joint_deviation_l1, weight=-0.03, params={"asset_cfg": LEG_CFG})
-    trot_gait = RewTerm(
-        func=mdp.feet_gait,
-        weight=1.5,
-        params={
-            "period": 0.6,
-            # Explicit FL, FR, RL, RR order: the two diagonal pairs alternate.
-            "offset": [0.0, 0.5, 0.5, 0.0],
-            "threshold": 0.5,
-            "sensor_cfg": ORDERED_FEET_CFG,
-            "command_name": "base_velocity",
-        },
-    )
     feet_height = RewTerm(
         func=mdp.swing_foot_clearance,
         weight=0.5,
@@ -293,32 +306,12 @@ class RewardsCfg:
         # diagonal support is ~445 N/foot before dynamic impact.
         params={"threshold": 600.0, "sensor_cfg": ORDERED_FEET_CFG},
     )
-    tracking_contacts_force = RewTerm(
-        func=mdp.tracking_contacts_shaped_force,
-        weight=-0.5,
-        params={
-            "command_name": "base_velocity",
-            "sensor_cfg": ORDERED_FEET_CFG,
-            "sigma": 0.5,
-            "kappa": 0.07,
-        },
-    )
-    tracking_contacts_vel = RewTerm(
-        func=mdp.tracking_contacts_shaped_vel,
-        weight=-0.5,
-        params={
-            "command_name": "base_velocity",
-            "asset_cfg": ORDERED_FEET_BODY_CFG,
-            "sensor_cfg": ORDERED_FEET_CFG,
-            "sigma": 0.5,
-        },
-    )
 
 
 @configclass
 class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-    root_height = DoneTerm(func=mdp.root_height_below_minimum, params={"minimum_height": 0.25})
+    root_height = DoneTerm(func=mdp.root_height_below_minimum, params={"minimum_height": 0.30})
     leg_link_contact = DoneTerm(
         func=mdp.illegal_contact,
         params={
@@ -333,10 +326,7 @@ class TerminationsCfg:
             "threshold": 50.0,
         },
     )
-    # Match the converged B2RM Parkour task. Base contact and the explicit
-    # terminal penalty still reject falls, while 1.3 rad leaves room to
-    # recover from transient tilt during early gait exploration.
-    bad_orientation = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": 1.3})
+    bad_orientation = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": 0.8})
     base_contact = DoneTerm(
         func=mdp.illegal_contact,
         params={"sensor_cfg": SceneEntityCfg("base_ground_contact", body_names="base_link"), "threshold": 1.0},
@@ -364,6 +354,26 @@ class B2RMVelocityEnvCfg(ManagerBasedRLEnvCfg):
 
 @configclass
 class B2RMVelocityPlayEnvCfg(B2RMVelocityEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 1
+        self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges
+
+
+@configclass
+class B2RMVelocityParkourPoseEnvCfg(B2RMVelocityEnvCfg):
+    """A/B variant using the nominal pose and leg action scale of the successful Parkour run."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.robot.init_state.pos = (0.0, 0.0, 0.50)
+        self.scene.robot.init_state.joint_pos.update(PARKOUR_LEG_POS)
+        self.actions.leg_joint_pos.scale = 0.40
+        self.rewards.base_height.params["target_height"] = 0.55
+
+
+@configclass
+class B2RMVelocityParkourPosePlayEnvCfg(B2RMVelocityParkourPoseEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 1
